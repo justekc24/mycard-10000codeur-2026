@@ -136,6 +136,30 @@
     }
     .drag-hint.visible { display: flex; }
 
+    /* Contrôle de Zoom */
+    .zoom-control {
+      display: none; align-items: center; justify-content: center; gap: 12px;
+      width: 100%; max-width: 460px; background: var(--card-bg);
+      border: 1.5px solid var(--border); border-radius: var(--radius);
+      padding: 10px 16px; box-shadow: 0 2px 8px rgba(15,45,94,0.04);
+    }
+    .zoom-control.visible { display: flex; }
+    .zoom-icon { font-size: 16px; color: var(--accent); flex-shrink: 0; }
+    .zoom-icon.zoom-icon-lg { font-size: 20px; }
+    .zoom-slider {
+      flex: 1; -webkit-appearance: none; appearance: none; height: 4px;
+      border-radius: 4px; background: var(--border); outline: none; cursor: pointer;
+    }
+    .zoom-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; width: 20px; height: 20px;
+      border-radius: 50%; background: var(--primary); cursor: pointer;
+      border: 3px solid #fff; box-shadow: 0 1px 4px rgba(15,45,94,0.3);
+    }
+    .zoom-slider::-moz-range-thumb {
+      width: 20px; height: 20px; border-radius: 50%; background: var(--primary);
+      cursor: pointer; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(15,45,94,0.3);
+    }
+
     /* Zone Upload */
     .upload-zone {
       width: 100%; border: 2px dashed #b5c4e6; border-radius: var(--radius); padding: 24px 20px;
@@ -255,6 +279,12 @@
         Faites glisser la photo pour la recadrer
       </div>
 
+      <div class="zoom-control" id="zoomControl">
+        <span class="zoom-icon">🔍</span>
+        <input type="range" class="zoom-slider" id="zoomSlider" min="100" max="300" value="100" step="1">
+        <span class="zoom-icon zoom-icon-lg">🔍</span>
+      </div>
+
       <div class="upload-zone">
         <label class="upload-label" for="photoInput">
           <span class="upload-icon">📸</span>
@@ -291,7 +321,7 @@
 
 <script>
 /* =========================================
-   1. DONNÉES & CONFIGURATION (Avec Slugs)
+   1. DONNÉES & CONFIGURATION (Avec Slugs)
 ========================================= */
 const COMMUNES = [
   { id:"rdc",         nom:"R.D. Congo",      slug:"rdc",         carteImage:"./images/carte-rdc.jpg",          qrImage:"./images/qr-rdc.jpg",          whatsappLien:"https://chat.whatsapp.com/BtYoBjVhkdY15ZUbhIhLFR" },
@@ -324,17 +354,22 @@ let state = {
   backgroundImgObj: null, // Stocker l'objet image du fond
   offsetX: 0,
   offsetY: 0,
+  scale: 1,          // Facteur de zoom de la photo (1 = ajustement "cover" minimal)
   isDragging: false,
   lastX: 0,
   lastY: 0,
+  pinchStartDist: 0, // Distance initiale entre les 2 doigts (pinch-to-zoom)
+  pinchStartScale: 1,
   currentWALink: "#"
 };
 
 const canvas = document.getElementById('previewCanvas');
 const ctx = canvas.getContext('2d');
+const zoomControl = document.getElementById('zoomControl');
+const zoomSlider = document.getElementById('zoomSlider');
 
 /* =========================================
-   2. INITIALISATION & NAVIGATION (Hash)
+   2. INITIALISATION & NAVIGATION (Hash)
 ========================================= */
 const grille = document.getElementById('grille');
 COMMUNES.forEach(c => {
@@ -350,7 +385,7 @@ COMMUNES.forEach(c => {
 
 // Ouvrir une commune
 async function ouvrirCommune(c) {
-  state = { ...state, communeActive: c, userImgObj: null, backgroundImgObj: null, offsetX: 0, offsetY: 0, currentWALink: c.whatsappLien };
+  state = { ...state, communeActive: c, userImgObj: null, backgroundImgObj: null, offsetX: 0, offsetY: 0, scale: 1, currentWALink: c.whatsappLien };
   
   document.getElementById('home').style.display = 'none';
   document.getElementById('communePage').style.display = 'flex';
@@ -365,6 +400,8 @@ async function ouvrirCommune(c) {
   document.getElementById('dlBtn').disabled = true;
   document.getElementById('photoInput').value = '';
   document.getElementById('dragHint').classList.remove('visible');
+  zoomControl.classList.remove('visible');
+  zoomSlider.value = 100;
   document.getElementById('uploadText').textContent = 'Choisir ma photo';
   canvas.classList.remove('draggable');
   
@@ -417,7 +454,7 @@ function setStep(n) {
 }
 
 /* =========================================
-   3. GESTION DU CANVAS (Dessin & Drag)
+   3. GESTION DU CANVAS (Dessin & Drag)
 ========================================= */
 function dessinerApercu() {
   const c = state.communeActive;
@@ -456,8 +493,9 @@ function dessinerApercu() {
 
   if (state.userImgObj && state.userImgObj.complete) {
     const img = state.userImgObj;
-    // Logique "Cover" (remplir sans déformer)
-    const scale = Math.max((r * 2) / img.width, (r * 2) / img.height);
+    // Logique "Cover" (remplir sans déformer) + zoom utilisateur
+    const baseScale = Math.max((r * 2) / img.width, (r * 2) / img.height);
+    const scale = baseScale * state.scale;
     const sw = img.width * scale;
     const sh = img.height * scale;
 
@@ -478,6 +516,24 @@ function dessinerApercu() {
     ctx.fillText('📷', cx, cy);
   }
   ctx.restore();
+}
+
+/* Contrainte : empêche le zoom/déplacement de sortir des bords utiles de la photo */
+function clampOffsets() {
+  const c = state.communeActive;
+  if (!c || !state.userImgObj) return;
+  const W = canvas.width, H = canvas.height;
+  const { R } = getCercleCoords(c.id);
+  const r = R * W;
+  const img = state.userImgObj;
+  const baseScale = Math.max((r * 2) / img.width, (r * 2) / img.height);
+  const scale = baseScale * state.scale;
+  const sw = img.width * scale;
+  const sh = img.height * scale;
+  const maxOffsetX = Math.max(0, (sw - r * 2) / 2);
+  const maxOffsetY = Math.max(0, (sh - r * 2) / 2);
+  state.offsetX = Math.min(maxOffsetX, Math.max(-maxOffsetX, state.offsetX));
+  state.offsetY = Math.min(maxOffsetY, Math.max(-maxOffsetY, state.offsetY));
 }
 
 // ───────────────────── 2. TELECHARGEMENT AUTO ( Powerful A ) ─────────────────────
@@ -502,6 +558,8 @@ function handlePhoto(e) {
   setStep(2);
   state.offsetX = 0; // Reset position
   state.offsetY = 0;
+  state.scale = 1;   // Reset zoom
+  zoomSlider.value = 100;
 
   const reader = new FileReader();
   reader.onload = ev => {
@@ -513,6 +571,7 @@ function handlePhoto(e) {
       document.getElementById('dlBtn').disabled = false;
       canvas.classList.add('draggable');
       document.getElementById('dragHint').classList.add('visible');
+      zoomControl.classList.add('visible');
       document.getElementById('uploadText').textContent = 'Modifier ma photo';
       dessinerApercu();
 
@@ -544,7 +603,7 @@ document.getElementById('whatsappGroupBtn').onclick = () => {
 };
 
 /* =========================================
-   4. LOGIQUE DE GLISSEMENT (Mouvement)
+   4. LOGIQUE DE GLISSEMENT ET ZOOM (Mouvement)
 ========================================= */
 function getPointerPos(e) {
   const rect = canvas.getBoundingClientRect();
@@ -568,8 +627,25 @@ function pointerDansCercle(x, y) {
   return Math.pow(x - cx, 2) + Math.pow(y - cy, 2) <= Math.pow(r, 2);
 }
 
+/* Distance entre 2 points tactiles, pour le pinch-to-zoom */
+function getTouchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
 function handlePointerDown(e) {
   if (!state.userImgObj) return;
+
+  // Pinch-to-zoom : démarrage avec 2 doigts
+  if (e.touches && e.touches.length === 2) {
+    state.isDragging = false;
+    state.pinchStartDist = getTouchDistance(e.touches);
+    state.pinchStartScale = state.scale;
+    if (e.cancelable) e.preventDefault();
+    return;
+  }
+
   const pos = getPointerPos(e);
   if (pointerDansCercle(pos.x, pos.y)) {
     state.isDragging = true;
@@ -580,24 +656,61 @@ function handlePointerDown(e) {
 }
 
 function handlePointerMove(e) {
+  // Pinch-to-zoom en cours (2 doigts)
+  if (e.touches && e.touches.length === 2 && state.pinchStartDist > 0) {
+    const newDist = getTouchDistance(e.touches);
+    const ratio = newDist / state.pinchStartDist;
+    setZoom(state.pinchStartScale * ratio);
+    if (e.cancelable) e.preventDefault();
+    return;
+  }
+
   if (!state.isDragging) return;
   const pos = getPointerPos(e);
   state.offsetX += pos.x - state.lastX;
   state.offsetY += pos.y - state.lastY;
   state.lastX = pos.x;
   state.lastY = pos.y;
+  clampOffsets();
   dessinerApercu();
   if(e.cancelable) e.preventDefault();
 }
 
-function handlePointerUp() { state.isDragging = false; }
+function handlePointerUp(e) {
+  state.isDragging = false;
+  if (!e.touches || e.touches.length < 2) {
+    state.pinchStartDist = 0;
+  }
+}
+
+/* Définit le niveau de zoom (1 = 100%, 3 = 300%), met à jour le curseur et redessine */
+function setZoom(newScale) {
+  const clamped = Math.min(3, Math.max(1, newScale));
+  state.scale = clamped;
+  zoomSlider.value = Math.round(clamped * 100);
+  clampOffsets();
+  dessinerApercu();
+}
+
+// Curseur de zoom (UI)
+zoomSlider.addEventListener('input', (e) => {
+  setZoom(parseInt(e.target.value, 10) / 100);
+});
+
+// Molette de la souris sur le canvas (desktop)
+canvas.addEventListener('wheel', (e) => {
+  if (!state.userImgObj) return;
+  e.preventDefault();
+  const delta = e.deltaY < 0 ? 0.08 : -0.08;
+  setZoom(state.scale + delta);
+}, { passive: false });
 
 // mouse events
 canvas.addEventListener('mousedown', handlePointerDown);
 window.addEventListener('mousemove', handlePointerMove);
 window.addEventListener('mouseup', handlePointerUp);
 
-// touch events (Mobile)
+// touch events (Mobile) - inclut le pinch-to-zoom à 2 doigts
 canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
 window.addEventListener('touchmove', handlePointerMove, { passive: false });
 window.addEventListener('touchend', handlePointerUp);
