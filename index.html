@@ -341,7 +341,7 @@ const COMMUNES = [
 
 /* Géométrie du cercle de masquage selon le pays (coordonnées relatives 0 à 1) */
 function getCercleCoords(countryId) {
-  if (['cote-ivoire', 'mauritanie', 'burkina', 'comores', 'senegal','togo','madagascar'].includes(countryId)) {
+  if (['cote-ivoire', 'mauritanie', 'togo','burkina', 'comores', 'senegal','madagascar'].includes(countryId)) {
     return { CX: 0.5203, CY: 0.5750, R: 0.25 };
   }
   return { CX: 0.5088, CY: 0.5398, R: 0.235 };
